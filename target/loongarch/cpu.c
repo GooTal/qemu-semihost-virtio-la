@@ -22,6 +22,7 @@
 #include "vec.h"
 #include "sysemu/kvm.h"
 #include "kvm_loongarch.h"
+#include "semihosting/common-semi.h"
 #ifdef CONFIG_KVM
 #include <linux/kvm.h>
 #endif
@@ -61,6 +62,7 @@ static const char * const excp_names[] = {
     [EXCCODE_BCE] = "Bound Check Exception",
     [EXCCODE_SXD] = "128 bit vector instructions Disable exception",
     [EXCCODE_ASXD] = "256 bit vector instructions Disable exception",
+    [EXCCODE_SEMIHOST] = "Semihosting Exception",
 };
 
 const char *loongarch_exception_name(int32_t exception)
@@ -169,6 +171,12 @@ static void loongarch_cpu_do_interrupt(CPUState *cs)
                      "%s enter: pc " TARGET_FMT_lx " ERA " TARGET_FMT_lx
                      " TLBRERA " TARGET_FMT_lx " %s exception\n", __func__,
                      env->pc, env->CSR_ERA, env->CSR_TLBRERA, name);
+    }
+    
+    if(cs->exception_index == EXCCODE_SEMIHOST){
+        do_common_semihosting(cs);
+        env->pc += 4;
+        return;
     }
 
     switch (cs->exception_index) {

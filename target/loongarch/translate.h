@@ -49,6 +49,7 @@ typedef struct DisasContext {
     bool va32; /* 32-bit virtual address */
     uint32_t cpucfg1;
     uint32_t cpucfg2;
+    CPUState *cs;
 } DisasContext;
 
 void generate_exception(DisasContext *ctx, int excp);

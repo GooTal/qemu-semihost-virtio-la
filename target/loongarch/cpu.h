@@ -115,6 +115,7 @@ FIELD(FCSR0, CAUSE, 24, 5)
 #define  EXCCODE_BTD                 EXCODE(20, 0)
 #define  EXCCODE_BTE                 EXCODE(21, 0)
 #define  EXCCODE_DBP                 EXCODE(26, 0) /* Reserved subcode used for debug */
+#define  EXCCODE_SEMIHOST            EXCODE(27, 0) /* For semihosting */
 
 /* cpucfg[0] bits */
 FIELD(CPUCFG0, PRID, 0, 32)

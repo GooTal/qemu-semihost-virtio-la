@@ -480,7 +480,39 @@ static bool trans_dbcl(DisasContext *ctx, arg_dbcl *a)
     if (check_plv(ctx)) {
         return false;
     }
-    generate_exception(ctx, EXCCODE_DBP);
+    /*
+     * The LoongArch semihosting temporarily uses the following
+     * three-instruction sequence to flag a semihosting call:
+     *
+     *        slli.d $r0, $r0, 0x1f       0x00417c00
+     *        dbcl  0                     0x002a8000
+     *        srai.d $r0, $r0, 0x7        0x00491c00
+     *
+     * The two shift operations on the zero register are no-ops, used
+     * here to signify a semihosting exception, rather than a breakpoint.
+     *
+     * The three instructions are required to lie in the same page so
+     * that no exception will be raised when fetching them.
+     */
+    target_ulong    dbcl_addr = ctx->base.pc_next;
+    target_ulong    pre_addr = dbcl_addr - 4;
+    target_ulong    post_addr = dbcl_addr + 4;
+    uint32_t pre    = 0;
+    uint32_t dbcl   = 0;
+    uint32_t post   = 0;
+
+    if(semihosting_enabled(ctx->mem_idx >= MMU_PLV_USER) && 
+       (pre_addr & TARGET_PAGE_MASK) == (post_addr & TARGET_PAGE_MASK)) {
+        pre     = opcode_at(&ctx->base, pre_addr);
+        dbcl    = opcode_at(&ctx->base, dbcl_addr);
+        post    = opcode_at(&ctx->base, post_addr);
+    }
+
+    if(pre == 0x00417c00 && dbcl == 0x002a8000 && post == 0x00491c00){
+        generate_exception(ctx, EXCCODE_SEMIHOST);
+    }else{
+        generate_exception(ctx, EXCCODE_DBP);
+    }
     return true;
 }
 

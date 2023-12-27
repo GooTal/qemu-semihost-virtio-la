@@ -161,15 +161,186 @@ static int loongarch_map_address(CPULoongArchState *env, hwaddr *physical,
                                  int *prot, target_ulong address,
                                  MMUAccessType access_type, int mmu_idx)
 {
-    int index, match;
+   int tlbindex, match;
 
-    match = loongarch_tlb_search(env, address, &index);
+    match = loongarch_tlb_search(env, address, &tlbindex);
     if (match) {
         return loongarch_map_tlb_entry(env, physical, prot,
-                                       address, access_type, index, mmu_idx);
+                                       address, access_type, tlbindex, mmu_idx);
     }
 
-    return TLBRET_NOMATCH;
+    CPUState *cs = env_cpu(env);
+
+    if(cs->exception_index != EXCCODE_SEMIHOST){
+        return TLBRET_NOMATCH;
+    }else{
+
+    /** 
+     * For semihosting memory access, Qemu would only acquire virtual address, we want 
+     * to do the page walk when there is a legal mapping, even if the mapping is not 
+     * yet in TLB. return TLBRET_MATCH if there is a valid map, else none zero.
+     * 
+     * NOTE: This is just a temporary solution for Loongson 3A5000, which still requires 
+     * OS to handdle tlb refill if not in semihosting exception. 
+     * 
+     */
+        
+        target_ulong phys, index;
+        int shift;
+        uint64_t dir_base, dir_width;
+        uint64_t base;
+        bool huge;
+        target_ulong d, v, i;
+
+        /* 0:64bit, 1:128bit, 2:192bit, 3:256bit */
+        shift = FIELD_EX64(env->CSR_PWCL, CSR_PWCL, PTEWIDTH);
+        shift = (shift + 1) * 3;
+
+        if ((address >> 63) & 0x1) {
+            base = env->CSR_PGDH;
+        } else {
+            base = env->CSR_PGDL;
+        }
+        base &= TARGET_PHYS_MASK;
+
+        for (i = 4; i > 0; i--) {
+
+            switch (i) {
+                case 1:
+                    dir_base = FIELD_EX64(env->CSR_PWCL, CSR_PWCL, DIR1_BASE);
+                    dir_width = FIELD_EX64(env->CSR_PWCL, CSR_PWCL, DIR1_WIDTH);
+                    break;
+                case 2:
+                    dir_base = FIELD_EX64(env->CSR_PWCL, CSR_PWCL, DIR2_BASE);
+                    dir_width = FIELD_EX64(env->CSR_PWCL, CSR_PWCL, DIR2_WIDTH);
+                    break;
+                case 3:
+                    dir_base = FIELD_EX64(env->CSR_PWCH, CSR_PWCH, DIR3_BASE);
+                    dir_width = FIELD_EX64(env->CSR_PWCH, CSR_PWCH, DIR3_WIDTH);
+                    break;
+                case 4:
+                    dir_base = FIELD_EX64(env->CSR_PWCH, CSR_PWCH, DIR4_BASE);
+                    dir_width = FIELD_EX64(env->CSR_PWCH, CSR_PWCH, DIR4_WIDTH);
+                    break;
+                default:
+                    return TLBRET_NOMATCH;
+            }
+
+            if (dir_width != 0) {
+                /* get next level page directory */
+                index = (address >> dir_base) & ((1 << dir_width) - 1);
+                phys = base | index << shift;
+                base = ldq_phys(cs->as, phys) & TARGET_PHYS_MASK;
+                huge = (base >> LOONGARCH_PAGE_HUGE_SHIFT) & 0x1;
+                if (!huge) {
+                    /* mask off page dir permission bits */
+                    base &= TARGET_PAGE_MASK;
+                } else {
+                    break;
+                }
+                if (base == 0) return TLBRET_NOMATCH;
+            }
+        }
+
+        target_ulong ptindex, phys0, phys1, ptoffset0, ptoffset1, odd;
+        // target_ulong ptindex, phys0, ptoffset0;
+        target_ulong ps, tmp0, tmp1;
+        // target_ulong ps, tmp0;
+        target_ulong d0, d1, v0, v1; 
+        // target_ulong d0, v0;
+        uint64_t ptbase = FIELD_EX64(env->CSR_PWCL, CSR_PWCL, PTBASE);
+        uint64_t ptwidth = FIELD_EX64(env->CSR_PWCL, CSR_PWCL, PTWIDTH);
+        /* pte */
+        if (huge) {
+            /* Huge Page. base is paddr */
+            base = base ^ (1 << LOONGARCH_PAGE_HUGE_SHIFT);
+            /* Move Global bit */
+            base = ((base & (1 << LOONGARCH_HGLOBAL_SHIFT))  >>
+                    LOONGARCH_HGLOBAL_SHIFT) << R_TLBENTRY_G_SHIFT |
+                    (base & (~(1 << LOONGARCH_HGLOBAL_SHIFT)));
+            /* get TARGET_PAGE_SIZE aligned physical address */
+            base += (address & TARGET_PHYS_MASK) & ((1 << dir_base) - 1) & TARGET_PAGE_MASK;
+            
+            ps = ptbase + ptwidth - 1;//16MB
+
+            tmp0 = base & (~MAKE_64BIT_MASK(ps, 1));
+            tmp1 = tmp0 + (1 << ps);
+        } else {
+            ptindex = (address >> ptbase) & ((1 << ptwidth) - 1);
+            if(ptindex & 0x1){
+                odd = 1;
+            }else{
+                odd = 0;
+            }
+            ptindex = ptindex & ~0x1U;
+
+            ptoffset1 = (ptindex + 1) << shift;
+            phys1 = base | ptoffset1;
+            tmp1 = ldq_phys(cs->as, phys1) & TARGET_PHYS_MASK;
+            tmp1 += (address & TARGET_PHYS_MASK) & ((1 << ptbase) - 1) & TARGET_PAGE_MASK;
+
+            ptoffset0 = ptindex << shift;
+            phys0 = base | ptoffset0;
+            tmp0 = ldq_phys(cs->as, phys0) & TARGET_PHYS_MASK;
+            tmp0 += (address & TARGET_PHYS_MASK) & ((1 << ptbase) - 1) & TARGET_PAGE_MASK;
+
+            if (tmp0 == 0 && tmp1 == 0)
+            return TLBRET_NOMATCH;
+
+            /* get TARGET_PAGE_SIZE aligned physical address */
+
+            ps = ptbase;
+        }
+
+        v0 = tmp0 & 1;
+        v1 = tmp1 & 1;
+        d0 = (tmp0 >> 1) & 1;
+        d1 = (tmp1 >> 1) & 1;
+        //fprintf(stderr, "debug map: %lx %lx\n", address, base);
+
+        /* physmem cpu_memory_rw_debug expect a TARGET_PAGE_SIZE aligned result
+        * mask off the attribute bits here
+        */
+        if(odd){
+            *physical = tmp1 & TARGET_PAGE_MASK;
+            d = d1;
+            v = v1;
+        }else{
+            *physical = tmp0 & TARGET_PAGE_MASK;
+            d = d0;
+            v = v0;
+        }
+
+        /* TODO: check plv and other bits? */
+        if (!v)
+            return TLBRET_NOMATCH;
+
+        if (!d)
+            *prot = PAGE_READ;
+        else
+            *prot = PAGE_READ | PAGE_WRITE;
+
+        
+        /**
+         * Handle tlb refill 
+         */
+
+        env->CSR_TLBRBADV = address;
+        env->CSR_TLBRERA = FIELD_DP64(env->CSR_TLBRERA, CSR_TLBRERA, ISTLBR, 1);
+        env->CSR_TLBRERA = FIELD_DP64(env->CSR_TLBRERA, CSR_TLBRERA, PC, env->pc >> 2);
+
+        env->CSR_TLBREHI = FIELD_DP64(env->CSR_TLBREHI, CSR_TLBREHI, PS, ps);
+        env->CSR_TLBREHI = FIELD_DP64(env->CSR_TLBREHI, CSR_TLBREHI_64, VPPN, extract64(address, 13, 35));
+
+        env->CSR_TLBRELO0 = tmp0;
+        env->CSR_TLBRELO1 = tmp1;
+
+        helper_tlbfill(env);
+
+        env->CSR_TLBRERA = FIELD_DP64(env->CSR_TLBRERA, CSR_TLBRERA, ISTLBR, 0);
+
+        return TLBRET_MATCH;
+    }
 }
 
 static hwaddr dmw_va2pa(CPULoongArchState *env, target_ulong va,

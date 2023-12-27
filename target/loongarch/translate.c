@@ -14,6 +14,7 @@
 #include "exec/helper-proto.h"
 #include "exec/helper-gen.h"
 #include "exec/log.h"
+#include "semihosting/semihost.h"
 #include "qemu/qemu-print.h"
 #include "fpu/softfloat.h"
 #include "translate.h"
@@ -147,6 +148,7 @@ static void loongarch_tr_init_disas_context(DisasContextBase *dcbase,
 
     ctx->cpucfg1 = env->cpucfg[1];
     ctx->cpucfg2 = env->cpucfg[2];
+    ctx->cs = cs;
 }
 
 static void loongarch_tr_tb_start(DisasContextBase *dcbase, CPUState *cs)
@@ -216,6 +218,15 @@ static void gen_set_gpr(int reg_num, TCGv t, DisasExtend dst_ext)
             g_assert_not_reached();
         }
     }
+}
+
+static uint32_t opcode_at(DisasContextBase *dcbase, target_ulong pc)
+{
+    DisasContext *ctx = container_of(dcbase, DisasContext, base);
+    CPUState *cpu = ctx->cs;
+    CPULoongArchState *env = cpu_env(cpu);
+
+    return cpu_ldl_code(env, pc);
 }
 
 static TCGv get_fpr(DisasContext *ctx, int reg_num)
