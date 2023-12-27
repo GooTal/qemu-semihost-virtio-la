@@ -31,7 +31,7 @@
  * 16 - 63  GSI for CPU devices such as timers/perf monitor etc
  * 64 -     GSI for external devices
  */
-#define VIRT_PCH_PIC_IRQ_NUM     32
+#define VIRT_PCH_PIC_IRQ_NUM     64
 #define VIRT_GSI_BASE            64
 #define VIRT_DEVICE_IRQS         16
 #define VIRT_UART_IRQ            (VIRT_GSI_BASE + 2)

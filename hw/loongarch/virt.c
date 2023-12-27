@@ -516,6 +516,7 @@ static void loongarch_devices_init(DeviceState *pch_pic, LoongArchMachineState *
     sysbus_create_simple("ls7a_rtc", VIRT_RTC_REG_BASE,
                          qdev_get_gpio_in(pch_pic,
                          VIRT_RTC_IRQ - VIRT_GSI_BASE));
+    sysbus_create_simple("virtio-mmio", 0x1e200000, qdev_get_gpio_in(pch_pic, 7));
     fdt_add_rtc_node(lams);
 
     /* acpi ged */
